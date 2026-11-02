@@ -1,0 +1,2 @@
+Filesystem     1024-blocks  Used Available Capacity Mounted on
+/dev/sdb             98720 98720         0     100% /usr/lib/linux-tools/6.18.54.1-microsoft-standard-WSL2

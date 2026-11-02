@@ -146,6 +146,15 @@ describe('gpu', () => {
 });
 
 describe('disks', () => {
+  test('parses the real WSL2 linux-tools df fixture without losing its full usage', () => {
+    expect(parseDf(fixture('linux-wsl2-df.txt'))).toEqual([
+      {
+        filesystem: '/dev/sdb', size: 98720 * KIB, used: 98720 * KIB, available: 0,
+        mount: '/usr/lib/linux-tools/6.18.54.1-microsoft-standard-WSL2',
+      },
+    ]);
+  });
+
   test('macOS folds the APFS container and hides system volumes', () => {
     expect(darwinDisks(parseDf(fixture('darwin-df.txt')))).toEqual([
       { mount: '/', label: null, used: (971298980 - 856829720) * KIB, total: 971298980 * KIB },
@@ -170,6 +179,54 @@ describe('disks', () => {
       { mount: '/', label: null, used: 177670404 * KIB, total: (177670404 + 255987860) * KIB },
     ]);
   });
+
+  // The second kernel version is synthetic, not captured tool output.
+  for (const version of ['6.18.54.1', '6.19.1.2']) {
+    test.each([false, true])(`Linux excludes WSL2 linux-tools ${version}, container=%s`, (container) => {
+      const text = fixture('linux-wsl2-df.txt').replace('6.18.54.1', version)
+        + `\n${container ? 'overlay' : '/dev/sda1'} 1000 400 600 40% /`;
+      expect(linuxDisks(parseDf(text), container)).toEqual([
+        { mount: '/', label: null, used: 400 * KIB, total: 1000 * KIB },
+      ]);
+    });
+  }
+
+  test.each([
+    '/data',
+    '/opt/linux-tools/6.18.54.1-microsoft-standard-WSL2',
+    '/usr/lib/linux-tools/custom',
+    '/usr/lib/linux-tools/6.18.54.1-microsoft-standard-WSL2-backup',
+    '/usr/lib/linux-tools/6.18.54.1-microsoft-standard-WSL2/data',
+    '/usr/lib/linux-tools/-microsoft-standard-WSL2',
+  ])('Linux preserves an ordinary full disk at %s', (mount) => {
+    const text = [
+      'Filesystem 1024-blocks Used Available Capacity Mounted on',
+      '/dev/sda1 1000 400 600 40% /',
+      `/dev/sdc1 200 200 0 100% ${mount}`,
+    ].join('\n');
+    expect(linuxDisks(parseDf(text), false)).toEqual([
+      { mount: '/', label: null, used: 400 * KIB, total: 1000 * KIB },
+      { mount, label: null, used: 200 * KIB, total: 200 * KIB },
+    ]);
+  });
+
+  for (const filesystem of ['/dev/sdb', '/dev/sdc1']) {
+    test.each([false, true])(`Linux removes WSL2 before deduplication against ${filesystem}, reversed=%s`, (reversed) => {
+      const rows = parseDf(fixture('linux-wsl2-df.txt'));
+      const ordinary = {
+        filesystem, size: 98720 * KIB, used: 98720 * KIB, available: 0,
+        mount: '/data/ordinary-disk-with-a-mount-longer-than-the-wsl2-linux-tools-system-mount',
+      };
+      const system = rows[0];
+      if (!system) throw new Error('Expected WSL2 fixture row');
+      expect(ordinary.mount.length).toBeGreaterThan(system.mount.length);
+      rows.push(ordinary);
+      if (reversed) rows.reverse();
+      expect(linuxDisks(rows, false)).toEqual([
+        { mount: ordinary.mount, label: null, used: 98720 * KIB, total: 98720 * KIB },
+      ]);
+    });
+  }
 
   test('Linux container: a bind mount of the same filesystem is not a second disk', () => {
     const text = [

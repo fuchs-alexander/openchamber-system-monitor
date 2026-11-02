@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 
+import { linuxDisks, parseDf } from '../src/service/collectors/parse-disks.ts';
 import { createSampler, settle, type SamplerDeps } from '../src/service/sampler.ts';
 import { evaluateWarnings, sustainedHigh, SUSTAINED_SAMPLES } from '../src/service/warnings.ts';
 import {
+  diskPercent,
+  fullestDisk,
   HISTORY_LENGTH,
   IDLE_STOP_MS,
   RETRY_UNAVAILABLE_MS,
@@ -78,6 +82,26 @@ const harness = () => {
 };
 
 describe('sampler', () => {
+  test.each([false, true])('WSL2 does not affect disk state, ordinary full /data=%s', async (fullData) => {
+    const h = harness();
+    const text = readFileSync(new URL('./fixtures/linux-wsl2-df.txt', import.meta.url), 'utf8')
+      + '\n/dev/sda1 1000 400 600 40% /'
+      + (fullData ? '\n/dev/sdc1 200 200 0 100% /data' : '');
+    h.values.disks = () => linuxDisks(parseDf(text), false);
+    const stats = await createSampler(h.deps).stats();
+    const root = { mount: '/', label: null, used: 400 * 1024, total: 1000 * 1024 };
+    const data = { mount: '/data', label: null, used: 200 * 1024, total: 200 * 1024 };
+    expect(stats.disks.status).toBe('ok');
+    if (stats.disks.status !== 'ok') throw new Error('Expected available disks');
+    expect(stats.disks.items).toEqual(fullData ? [root, data] : [root]);
+    const fullest = fullestDisk(stats.disks);
+    expect(fullest).toEqual(fullData ? data : root);
+    if (!fullest) throw new Error('Expected a monitored disk');
+    expect(diskPercent(fullest)).toBe(fullData ? 100 : 40);
+    expect(stats.warnings).toEqual(fullData ? [{ kind: 'disk', target: '/data', level: 'critical' }] : []);
+    expect(stats.warnings.length).toBe(fullData ? 1 : 0);
+  });
+
   test('first request primes, measures once and answers', async () => {
     const h = harness();
     const sampler = createSampler(h.deps);

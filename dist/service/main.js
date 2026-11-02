@@ -330,7 +330,7 @@ var darwinDisks = (rows) => {
     return { mount, label, used: entry.size - entry.available, total: entry.size };
   }).sort(byMount);
 };
-var LINUX_HIDDEN_MOUNT = /^\/(proc|sys|dev|run|snap)(\/|$)|^\/etc\//;
+var LINUX_HIDDEN_MOUNT = /^\/(proc|sys|dev|run|snap)(\/|$)|^\/etc\/|^\/usr\/lib\/linux-tools\/[^/]+-microsoft-standard-WSL2$/;
 var linuxDisks = (rows, container) => {
   const byDevice = new Map;
   for (const row of rows) {

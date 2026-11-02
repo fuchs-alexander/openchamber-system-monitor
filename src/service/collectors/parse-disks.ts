@@ -50,7 +50,7 @@ export const darwinDisks = (rows: DfRow[]): Disk[] => {
     .sort(byMount);
 };
 
-const LINUX_HIDDEN_MOUNT = /^\/(proc|sys|dev|run|snap)(\/|$)|^\/etc\//;
+const LINUX_HIDDEN_MOUNT = /^\/(proc|sys|dev|run|snap)(\/|$)|^\/etc\/|^\/usr\/lib\/linux-tools\/[^/]+-microsoft-standard-WSL2$/;
 
 /**
  * Real filesystems (`/dev/…`, no loop devices), one row per device under its
