@@ -1,5 +1,5 @@
 import { unavailable, type Disk, type Platform, type Unavailable } from '../../shared/stats.ts';
-import { run } from './exec.ts';
+import { run, type ExecResult } from './exec.ts';
 import { darwinDisks, linuxDisks, parseDf, parseWindowsDisks } from './parse-disks.ts';
 import { runPowerShell } from './windows.ts';
 
@@ -10,23 +10,30 @@ const WINDOWS_TIMEOUT_MS = 10_000;
 
 const DF = ['/bin/df', '/usr/bin/df', 'df'];
 
-const readDf = async (): Promise<{ ok: true; stdout: string } | Unavailable> => {
+type Exec = typeof run;
+
+// A dead mount (a stale FUSE mount, say) makes `df` exit non-zero while it still
+// prints every row it could read; usable rows are worth more than the exit code.
+const usable = (result: ExecResult): boolean => result.ok || parseDf(result.stdout).length > 0;
+
+const readDf = async (exec: Exec = run): Promise<{ ok: true; stdout: string } | Unavailable> => {
   // `-l` (local only) is missing from BusyBox; fall back to every filesystem.
-  const local = await run(DF, ['-kPl']);
-  if (local.ok) return local;
-  const all = await run(DF, ['-kP']);
-  if (all.ok) return all;
-  return unavailable(all.missing ? 'tool-missing' : 'failed', 'df');
+  const local = await exec(DF, ['-kPl']);
+  if (usable(local)) return { ok: true, stdout: local.stdout };
+  const all = await exec(DF, ['-kP']);
+  if (usable(all)) return { ok: true, stdout: all.stdout };
+  if (!all.ok && all.missing) return unavailable('tool-missing', 'df');
+  return unavailable('failed', 'df');
 };
 
-export const readDisks = async (platform: Platform, container: boolean): Promise<Disk[] | Unavailable> => {
+export const readDisks = async (platform: Platform, container: boolean, exec: Exec = run): Promise<Disk[] | Unavailable> => {
   if (platform === 'win32') {
     const result = await runPowerShell(WINDOWS_DISKS, WINDOWS_TIMEOUT_MS);
     if (!result.ok) return unavailable(result.missing ? 'tool-missing' : 'failed', 'powershell');
     return parseWindowsDisks(result.stdout) ?? unavailable('failed');
   }
   if (platform === 'darwin' || platform === 'linux') {
-    const df = await readDf();
+    const df = await readDf(exec);
     if (!('ok' in df)) return df;
     const rows = parseDf(df.stdout);
     if (rows.length === 0) return unavailable('failed');

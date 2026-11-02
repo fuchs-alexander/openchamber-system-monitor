@@ -49,13 +49,13 @@ var run = async (commands, args, timeout = EXEC_TIMEOUT_MS, env = process.env) =
           resolve({ ok: true, stdout });
           return;
         }
-        resolve({ ok: false, missing: "code" in error && error.code === "ENOENT" });
+        resolve({ ok: false, missing: "code" in error && error.code === "ENOENT", stdout: stdout ?? "" });
       });
     });
     if (result.ok || !result.missing)
       return result;
   }
-  return { ok: false, missing: true };
+  return { ok: false, missing: true, stdout: "" };
 };
 var readText = async (path) => {
   try {
@@ -490,16 +490,19 @@ var createGpuLoop = () => {
 var WINDOWS_DISKS = 'Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" | Select-Object DeviceID, VolumeName, Size, FreeSpace | ConvertTo-Json -Compress';
 var WINDOWS_TIMEOUT_MS = 1e4;
 var DF = ["/bin/df", "/usr/bin/df", "df"];
-var readDf = async () => {
-  const local = await run(DF, ["-kPl"]);
-  if (local.ok)
-    return local;
-  const all = await run(DF, ["-kP"]);
-  if (all.ok)
-    return all;
-  return unavailable(all.missing ? "tool-missing" : "failed", "df");
+var usable = (result) => result.ok || parseDf(result.stdout).length > 0;
+var readDf = async (exec = run) => {
+  const local = await exec(DF, ["-kPl"]);
+  if (usable(local))
+    return { ok: true, stdout: local.stdout };
+  const all = await exec(DF, ["-kP"]);
+  if (usable(all))
+    return { ok: true, stdout: all.stdout };
+  if (!all.ok && all.missing)
+    return unavailable("tool-missing", "df");
+  return unavailable("failed", "df");
 };
-var readDisks = async (platform, container) => {
+var readDisks = async (platform, container, exec = run) => {
   if (platform === "win32") {
     const result = await runPowerShell(WINDOWS_DISKS, WINDOWS_TIMEOUT_MS);
     if (!result.ok)
@@ -507,7 +510,7 @@ var readDisks = async (platform, container) => {
     return parseWindowsDisks(result.stdout) ?? unavailable("failed");
   }
   if (platform === "darwin" || platform === "linux") {
-    const df = await readDf();
+    const df = await readDf(exec);
     if (!("ok" in df))
       return df;
     const rows = parseDf(df.stdout);

@@ -5,7 +5,8 @@ export const EXEC_TIMEOUT_MS = 3_000;
 
 export type ExecResult =
   | { ok: true; stdout: string }
-  | { ok: false; missing: boolean };
+  /** A failing tool may still have printed usable output. */
+  | { ok: false; missing: boolean; stdout: string };
 
 /**
  * Runs one of `commands` (absolute paths first, bare name last) without a shell.
@@ -25,13 +26,13 @@ export const run = async (
           resolve({ ok: true, stdout });
           return;
         }
-        resolve({ ok: false, missing: 'code' in error && error.code === 'ENOENT' });
+        resolve({ ok: false, missing: 'code' in error && error.code === 'ENOENT', stdout: stdout ?? '' });
       });
     });
     // Only a missing binary moves on to the next candidate; a failing one is the answer.
     if (result.ok || !result.missing) return result;
   }
-  return { ok: false, missing: true };
+  return { ok: false, missing: true, stdout: '' };
 };
 
 export const readText = async (path: string): Promise<string | null> => {
