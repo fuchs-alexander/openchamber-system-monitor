@@ -10,7 +10,7 @@ type DfRow = { filesystem: string; size: number; used: number; available: number
 export const parseDf = (text: string): DfRow[] => {
   const rows: DfRow[] = [];
   for (const line of text.split(/\r?\n/).slice(1)) {
-    const match = /^(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+%\s+(.+)$/.exec(line.trim());
+    const match = /^(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+%\s+(\S.*)$/.exec(line.trimStart());
     if (!match?.[1] || !match[5]) continue;
     rows.push({
       filesystem: match[1],
@@ -51,6 +51,24 @@ export const darwinDisks = (rows: DfRow[]): Disk[] => {
 };
 
 const LINUX_HIDDEN_MOUNT = /^\/(proc|sys|dev|run|snap)(\/|$)|^\/etc\//;
+const WSL2_SYSTEM_MOUNT = /^\/usr\/(?:lib\/linux-tools\/|src\/linux-headers-)[^/]+-microsoft-standard-WSL2$/;
+
+const isLinuxDiskCandidate = (row: DfRow, container: boolean): boolean => {
+  const real = row.filesystem.startsWith('/dev/') && !row.filesystem.startsWith('/dev/loop');
+  const containerRoot = container && row.mount === '/';
+  return (real || containerRoot) && !LINUX_HIDDEN_MOUNT.test(row.mount) && row.size > 0;
+};
+
+export const wsl2DevicesWithoutMount = (rows: DfRow[], container: boolean): Set<string> => {
+  const wsl2 = new Set<string>();
+  const visible = new Set<string>();
+  for (const row of rows) {
+    if (!isLinuxDiskCandidate(row, container)) continue;
+    (WSL2_SYSTEM_MOUNT.test(row.mount) ? wsl2 : visible).add(row.filesystem);
+  }
+  for (const device of visible) wsl2.delete(device);
+  return wsl2;
+};
 
 /**
  * Real filesystems (`/dev/…`, no loop devices), one row per device under its
@@ -60,9 +78,7 @@ const LINUX_HIDDEN_MOUNT = /^\/(proc|sys|dev|run|snap)(\/|$)|^\/etc\//;
 export const linuxDisks = (rows: DfRow[], container: boolean): Disk[] => {
   const byDevice = new Map<string, DfRow>();
   for (const row of rows) {
-    const real = row.filesystem.startsWith('/dev/') && !row.filesystem.startsWith('/dev/loop');
-    const containerRoot = container && row.mount === '/';
-    if (!(real || containerRoot) || LINUX_HIDDEN_MOUNT.test(row.mount) || row.size <= 0) continue;
+    if (!isLinuxDiskCandidate(row, container) || WSL2_SYSTEM_MOUNT.test(row.mount)) continue;
     const existing = byDevice.get(row.filesystem);
     if (!existing || row.mount.length < existing.mount.length) byDevice.set(row.filesystem, row);
   }

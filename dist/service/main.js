@@ -300,7 +300,7 @@ var KIB2 = 1024;
 var parseDf = (text) => {
   const rows = [];
   for (const line of text.split(/\r?\n/).slice(1)) {
-    const match = /^(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+%\s+(.+)$/.exec(line.trim());
+    const match = /^(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+%\s+(\S.*)$/.exec(line.trimStart());
     if (!match?.[1] || !match[5])
       continue;
     rows.push({
@@ -331,12 +331,28 @@ var darwinDisks = (rows) => {
   }).sort(byMount);
 };
 var LINUX_HIDDEN_MOUNT = /^\/(proc|sys|dev|run|snap)(\/|$)|^\/etc\//;
+var WSL2_SYSTEM_MOUNT = /^\/usr\/(?:lib\/linux-tools\/|src\/linux-headers-)[^/]+-microsoft-standard-WSL2$/;
+var isLinuxDiskCandidate = (row, container) => {
+  const real = row.filesystem.startsWith("/dev/") && !row.filesystem.startsWith("/dev/loop");
+  const containerRoot = container && row.mount === "/";
+  return (real || containerRoot) && !LINUX_HIDDEN_MOUNT.test(row.mount) && row.size > 0;
+};
+var wsl2DevicesWithoutMount = (rows, container) => {
+  const wsl2 = new Set;
+  const visible = new Set;
+  for (const row of rows) {
+    if (!isLinuxDiskCandidate(row, container))
+      continue;
+    (WSL2_SYSTEM_MOUNT.test(row.mount) ? wsl2 : visible).add(row.filesystem);
+  }
+  for (const device of visible)
+    wsl2.delete(device);
+  return wsl2;
+};
 var linuxDisks = (rows, container) => {
   const byDevice = new Map;
   for (const row of rows) {
-    const real = row.filesystem.startsWith("/dev/") && !row.filesystem.startsWith("/dev/loop");
-    const containerRoot = container && row.mount === "/";
-    if (!(real || containerRoot) || LINUX_HIDDEN_MOUNT.test(row.mount) || row.size <= 0)
+    if (!isLinuxDiskCandidate(row, container) || WSL2_SYSTEM_MOUNT.test(row.mount))
       continue;
     const existing = byDevice.get(row.filesystem);
     if (!existing || row.mount.length < existing.mount.length)
@@ -493,10 +509,10 @@ var DF = ["/bin/df", "/usr/bin/df", "df"];
 var readDf = async () => {
   const local = await run(DF, ["-kPl"]);
   if (local.ok)
-    return local;
+    return { ...local, local: true };
   const all = await run(DF, ["-kP"]);
   if (all.ok)
-    return all;
+    return { ...all, local: false };
   return unavailable(all.missing ? "tool-missing" : "failed", "df");
 };
 var readDisks = async (platform, container) => {
@@ -513,7 +529,19 @@ var readDisks = async (platform, container) => {
     const rows = parseDf(df.stdout);
     if (rows.length === 0)
       return unavailable("failed");
-    return platform === "darwin" ? darwinDisks(rows) : linuxDisks(rows, container);
+    if (platform === "darwin")
+      return darwinDisks(rows);
+    const missingDevices = wsl2DevicesWithoutMount(rows, container);
+    if (missingDevices.size > 0) {
+      const expanded = await run(DF, [df.local ? "-akPl" : "-akP"]);
+      if (expanded.ok) {
+        for (const row of parseDf(expanded.stdout)) {
+          if (missingDevices.has(row.filesystem))
+            rows.push(row);
+        }
+      }
+    }
+    return linuxDisks(rows, container);
   }
   return unavailable("unsupported");
 };

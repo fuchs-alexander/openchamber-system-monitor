@@ -1,0 +1,2 @@
+Filesystem     1024-blocks  Used Available Capacity Mounted on
+/dev/sdb             99148 99148         0     100% /usr/src/linux-headers-6.18.58.1-microsoft-standard-WSL2
